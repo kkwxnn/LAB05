@@ -41,16 +41,24 @@
 
 /* Private variables ---------------------------------------------------------*/
 UART_HandleTypeDef huart2;
+DMA_HandleTypeDef hdma_usart2_tx;
 
 /* USER CODE BEGIN PV */
 uint8_t RxBuffer[1];
-uint8_t TxBuffer[40];
+uint8_t TxBuffer[200];
 uint32_t Hz = 1000;
+uint32_t n = 1;
+int mode = 0;
+int LED_last = 1;
+int Button_state = 0;
+int Button_flag = 0;
+
 /* USER CODE END PV */
 
 /* Private function prototypes -----------------------------------------------*/
 void SystemClock_Config(void);
 static void MX_GPIO_Init(void);
+static void MX_DMA_Init(void);
 static void MX_USART2_UART_Init(void);
 /* USER CODE BEGIN PFP */
 void UARTInterruptConfig();
@@ -89,8 +97,13 @@ int main(void)
 
   /* Initialize all configured peripherals */
   MX_GPIO_Init();
+  MX_DMA_Init();
   MX_USART2_UART_Init();
   /* USER CODE BEGIN 2 */
+
+  sprintf((char*)TxBuffer,"\r\n----------------------\r\n Menu 1\r\n a: Speed Up +1Hz\r\n s: Speed Down -1Hz\r\n d: On/Off\r\n x: Back \r\n----------------------\r\n");
+  HAL_UART_Transmit_IT(&huart2, TxBuffer, strlen((char*)TxBuffer));
+
   UARTInterruptConfig();
 
   /* USER CODE END 2 */
@@ -102,11 +115,41 @@ int main(void)
     /* USER CODE END WHILE */
 
     /* USER CODE BEGIN 3 */
-	  static uint32_t timestamp = 1000;
-	  if (HAL_GetTick() > timestamp)
+	  if (mode == 0)
 	  {
-		  HAL_GPIO_TogglePin(GPIOA, GPIO_PIN_5);
-		  timestamp = HAL_GetTick() + Hz;
+		  static uint32_t timestamp = 1000;
+		  if (HAL_GetTick() > timestamp)
+		  {
+			  HAL_GPIO_TogglePin(GPIOA, GPIO_PIN_5);
+			  timestamp = HAL_GetTick() + (Hz/n);
+		  }
+	  }
+	  if (mode == 2)
+	  {
+		  switch(Button_state)
+		  {
+		  case 0:
+			  if (HAL_GPIO_ReadPin(GPIOC, GPIO_PIN_13) == 1)
+			  {
+				  sprintf((char*)TxBuffer,"\r\n----------------------\r\n Menu 2\r\n x: Back \r\n----------------------\r\n Button Status: Unpressed \r\n----------------------\r\n\r\n");
+				  HAL_UART_Transmit_IT(&huart2, TxBuffer, strlen((char*)TxBuffer));
+				  Button_state = 1;
+			  }
+			  break;
+		  case 1:
+			  if (HAL_GPIO_ReadPin(GPIOC, GPIO_PIN_13) == 0)
+			  {
+				  Button_flag = 1;
+				  if (Button_flag == 1)
+				  {
+					  sprintf((char*)TxBuffer,"\r\n----------------------\r\n Menu 2\r\n x: Back \r\n----------------------\r\n Button Status: Pressed \r\n----------------------\r\n\r\n");
+					  HAL_UART_Transmit_IT(&huart2, TxBuffer, strlen((char*)TxBuffer));
+					  Button_flag = 0;
+					  Button_state = 0;
+				  }
+			  }
+			  break;
+		  }
 	  }
   }
   /* USER CODE END 3 */
@@ -192,6 +235,22 @@ static void MX_USART2_UART_Init(void)
 }
 
 /**
+  * Enable DMA controller clock
+  */
+static void MX_DMA_Init(void)
+{
+
+  /* DMA controller clock enable */
+  __HAL_RCC_DMA1_CLK_ENABLE();
+
+  /* DMA interrupt init */
+  /* DMA1_Stream6_IRQn interrupt configuration */
+  HAL_NVIC_SetPriority(DMA1_Stream6_IRQn, 0, 0);
+  HAL_NVIC_EnableIRQ(DMA1_Stream6_IRQn);
+
+}
+
+/**
   * @brief GPIO Initialization Function
   * @param None
   * @retval None
@@ -245,54 +304,76 @@ void HAL_UART_RxCpltCallback(UART_HandleTypeDef *huart)
 		case 0:
 			if (RxBuffer[0] == 'a')
 			{
-				Hz = Hz/2;
-				sprintf((char*)TxBuffer,"%s: Speed Up +1Hz\r\n",RxBuffer);
+				mode = 0;
+				n += 1;
+				sprintf((char*)TxBuffer,"\r\n----------------------\r\n Menu 1\r\n a: Speed Up +1Hz\r\n s: Speed Down -1Hz\r\n d: On/Off\r\n x: Back \r\n----------------------\r\n %s: Speed Up +1Hz \r\n----------------------\r\n\r\n",RxBuffer);
 				HAL_UART_Transmit_IT(&huart2, TxBuffer, strlen((char*)TxBuffer));
 			}
-			else if (RxBuffer[0] == 's')
+			else if (RxBuffer[0] == 's' && n > 1)
 			{
-				Hz = Hz*2;
-				sprintf((char*)TxBuffer,"%s: Speed Down +1Hz\r\n",RxBuffer);
+				mode = 0;
+				n -= 1;
+				sprintf((char*)TxBuffer,"\r\n----------------------\r\n Menu 1\r\n a: Speed Up +1Hz\r\n s: Speed Down -1Hz\r\n d: On/Off\r\n x: Back \r\n----------------------\r\n %s: Speed Down -1Hz \r\n----------------------\r\n\r\n",RxBuffer);
+				HAL_UART_Transmit_IT(&huart2, TxBuffer, strlen((char*)TxBuffer));
+			}
+			else if (RxBuffer[0] == 's' && n == 1)
+			{
+				mode = 0;
+				sprintf((char*)TxBuffer,"\r\n----------------------\r\n Menu 1\r\n a: Speed Up +1Hz\r\n s: Speed Down -1Hz\r\n d: On/Off\r\n x: Back \r\n----------------------\r\n Reach Minimum Speed \r\n----------------------\r\n\r\n");
 				HAL_UART_Transmit_IT(&huart2, TxBuffer, strlen((char*)TxBuffer));
 			}
 			else if (RxBuffer[0] == 'd')
 			{
-				sprintf((char*)TxBuffer,"On\r\n");
-				HAL_UART_Transmit_IT(&huart2, TxBuffer, strlen((char*)TxBuffer));
+				mode = 1;
+				if (LED_last == 0)
+				{
+//					HAL_GPIO_WritePin(GPIOA, GPIO_PIN_5, 1);
+					sprintf((char*)TxBuffer,"\r\n----------------------\r\n Menu 1\r\n a: Speed Up +1Hz\r\n s: Speed Down -1Hz\r\n d: On/Off\r\n x: Back \r\n----------------------\r\n %s: On \r\n----------------------\r\n\r\n",RxBuffer);
+					HAL_UART_Transmit_IT(&huart2, TxBuffer, strlen((char*)TxBuffer));
+					LED_last = 1;
+					mode = 0;
+				}
+				else if (LED_last == 1)
+				{
+					HAL_GPIO_WritePin(GPIOA, GPIO_PIN_5, 0);
+					sprintf((char*)TxBuffer,"\r\n----------------------\r\n Menu 1\r\n a: Speed Up +1Hz\r\n s: Speed Down -1Hz\r\n d: On/Off\r\n x: Back \r\n----------------------\r\n %s: Off \r\n----------------------\r\n\r\n",RxBuffer);
+					HAL_UART_Transmit_IT(&huart2, TxBuffer, strlen((char*)TxBuffer));
+					LED_last = 0;
+				}
 			}
 			else if (RxBuffer[0] == 'x')
 			{
-				sprintf((char*)TxBuffer,"%s: back\r\n",RxBuffer);
+				sprintf((char*)TxBuffer,"\r\n----------------------\r\n Menu 2\r\n x: Back \r\n----------------------\r\n Button Status: Unpressed \r\n----------------------\r\n\r\n");
 				HAL_UART_Transmit_IT(&huart2, TxBuffer, strlen((char*)TxBuffer));
+				mode = 2;
 				state = 1;
 			}
 			else
 			{
-				sprintf((char*)TxBuffer,"Error\r\n");
+				sprintf((char*)TxBuffer,"\r\n----------------------\r\n Menu 1\r\n a: Speed Up +1Hz\r\n s: Speed Down -1Hz\r\n d: On/Off\r\n x: Back \r\n----------------------\r\n ERROR \r\n----------------------\r\n\r\n");
 				HAL_UART_Transmit_IT(&huart2, TxBuffer, strlen((char*)TxBuffer));
 			}
 			break;
 
 		case 1:
-			if (HAL_GPIO_ReadPin(GPIOC, GPIO_PIN_13) == 0)
+			if (RxBuffer[0] == 'x')
 			{
-				sprintf((char*)TxBuffer,"Button is pressed\r\n");
+				sprintf((char*)TxBuffer,"\r\n----------------------\r\n Menu 1\r\n a: Speed Up +1Hz\r\n s: Speed Down -1Hz\r\n d: On/Off\r\n x: Back \r\n----------------------\r\n");
 				HAL_UART_Transmit_IT(&huart2, TxBuffer, strlen((char*)TxBuffer));
-			}
-			else if (HAL_GPIO_ReadPin(GPIOC, GPIO_PIN_13) == 1)
-			{
-				sprintf((char*)TxBuffer,"Button is unpressed\r\n");
-				HAL_UART_Transmit_IT(&huart2, TxBuffer, strlen((char*)TxBuffer));
-			}
-			else if (RxBuffer[0] == 'x')
-			{
-				sprintf((char*)TxBuffer,"%s: back\r\n",RxBuffer);
-				HAL_UART_Transmit_IT(&huart2, TxBuffer, strlen((char*)TxBuffer));
-				state = 0;
+				if (LED_last == 0)
+				{
+					mode = 1;
+					state = 0;
+				}
+				else if (LED_last == 1)
+				{
+					mode = 0;
+					state = 0;
+				}
 			}
 			else
 			{
-				sprintf((char*)TxBuffer,"Error\r\n");
+				sprintf((char*)TxBuffer,"\r\n----------------------\r\n Menu 2\r\n x: Back \r\n----------------------\r\n ERROR \r\n----------------------\r\n\r\n");
 				HAL_UART_Transmit_IT(&huart2, TxBuffer, strlen((char*)TxBuffer));
 			}
 			break;
